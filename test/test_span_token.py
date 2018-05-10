@@ -1,12 +1,15 @@
 import unittest
 from unittest.mock import patch
-import mistletoe.span_token as span_token
+from mistletoe import span_token
+from functools import wraps
 
 
 class TestBranchToken(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(lambda: span_token._token_types.__setitem__(-1, span_token.RawText))
         patcher = patch('mistletoe.span_token.RawText')
         self.mock = patcher.start()
+        span_token._token_types[-1] = self.mock
         self.addCleanup(patcher.stop)
 
     def _test_parse(self, token_cls, raw, arg, **kwargs):
@@ -27,16 +30,25 @@ class TestStrong(TestBranchToken):
         self._test_parse(span_token.Strong, '**some text**', 'some text')
         self._test_parse(span_token.Strong, '__some text__', 'some text')
 
+    def test_multiline(self):
+        self._test_parse(span_token.Strong, '**some\ntext**', 'some\ntext')
+
 
 class TestEmphasis(TestBranchToken):
     def test_parse(self):
         self._test_parse(span_token.Emphasis, '*some text*', 'some text')
         self._test_parse(span_token.Emphasis, '_some text_', 'some text')
 
+    def test_multiline(self):
+        self._test_parse(span_token.Emphasis, '*some\ntext*', 'some\ntext')
+
 
 class TestInlineCode(TestBranchToken):
     def test_parse(self):
         self._test_parse(span_token.InlineCode, '`some text`', 'some text')
+
+    def test_multiline(self):
+        self._test_parse(span_token.InlineCode, '`some\ntext`', 'some\ntext')
 
 
 class TestStrikethrough(TestBranchToken):
@@ -46,8 +58,8 @@ class TestStrikethrough(TestBranchToken):
 
 class TestLink(TestBranchToken):
     def test_parse(self):
-        self._test_parse(span_token.Link, '[name 1] (target 1)', 'name 1',
-                         target='target 1')
+        self._test_parse(span_token.Link, '[name 1] (target1)', 'name 1',
+                         target='target1')
 
     def test_parse_multi_links(self):
         tokens = span_token.tokenize_inner('[n1](t1) & [n2](t2)')
@@ -59,6 +71,9 @@ class TestLink(TestBranchToken):
         token = next(span_token.tokenize_inner('[![alt](src)](target)'))
         child = next(iter(token.children))
         self._test_token(child, 'alt', src='src')
+
+    def test_multiline(self):
+        self._test_parse(span_token.Link, '[name]\n(target)', 'name', target='target')
 
 
 class TestFootnoteLink(TestBranchToken):
@@ -80,6 +95,11 @@ class TestFootnoteLink(TestBranchToken):
             next(tokens)
             self.mock.assert_called_with(' foo')
 
+    def test_multiline(self):
+        with patch('mistletoe.span_token.FootnoteAnchor') as mock:
+            self._test_parse(span_token.FootnoteLink, '[alt]\n[key]', 'alt')
+            mock.assert_called_with('key')
+
 
 class TestAutoLink(TestBranchToken):
     def test_parse(self):
@@ -92,11 +112,19 @@ class TestImage(TestBranchToken):
         self._test_parse(span_token.Image, '![alt] (link "title")', 'alt',
                          src='link', title='title')
 
+    def test_no_alternative_text(self):
+        self._test_parse(span_token.Image, '![] (link)', '', src='link')
+
 
 class TestFootnoteImage(TestBranchToken):
     def test_parse(self):
         with patch('mistletoe.span_token.FootnoteAnchor') as mock:
             self._test_parse(span_token.FootnoteImage, '![alt] [key]', 'alt')
+            mock.assert_called_with('key')
+
+    def test_no_alternative_text(self):
+        with patch('mistletoe.span_token.FootnoteAnchor') as mock:
+            self._test_parse(span_token.FootnoteImage, '![] [key]', '')
             mock.assert_called_with('key')
 
 
@@ -116,6 +144,11 @@ class TestRawText(unittest.TestCase):
         token = span_token.RawText('some text')
         self.assertEqual(token.content, 'some text')
 
+    def test_no_children(self):
+        token = span_token.RawText('some text')
+        with self.assertRaises(AttributeError):
+            token.children
+
 
 class TestContains(unittest.TestCase):
     def test_contains(self):
@@ -123,3 +156,4 @@ class TestContains(unittest.TestCase):
         self.assertTrue('text' in token)
         self.assertTrue('emphasis' in token)
         self.assertFalse('foo' in token)
+

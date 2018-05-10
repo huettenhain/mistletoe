@@ -2,14 +2,18 @@
 Built-in block-level token classes.
 """
 
+import re
+import sys
 from types import GeneratorType
 from itertools import zip_longest
 import mistletoe.block_tokenizer as tokenizer
 import mistletoe.span_token as span_token
 
-
-__all__ = ['Heading', 'Quote', 'BlockCode', 'Separator', 'List', 'Table',
-           'FootnoteBlock', 'Paragraph']
+"""
+Tokens to be included in the parsing process, in the order specified.
+"""
+__all__ = ['Heading', 'Quote', 'CodeFence', 'BlockCode', 'Separator',
+           'List', 'Table', 'FootnoteBlock', 'SetextHeading', 'Paragraph']
 
 
 def tokenize(lines, root=None):
@@ -31,7 +35,7 @@ def tokenize(lines, root=None):
 def add_token(token_cls, position=0):
     """
     Allows external manipulation of the parsing process.
-    This function is called in BaseRenderer.__enter__.
+    This function is usually called in BaseRenderer.__enter__.
 
     Arguments:
         token_cls (SpanToken): token to be included in the parsing process.
@@ -42,12 +46,20 @@ def add_token(token_cls, position=0):
 def remove_token(token_cls):
     """
     Allows external manipulation of the parsing process.
-    This function is called in BaseRenderer.__exit__.
+    This function is usually called in BaseRenderer.__exit__.
 
     Arguments:
         token_cls (SpanToken): token to be removed from the parsing process.
     """
     _token_types.remove(token_cls)
+
+
+def reset_tokens():
+    """
+    Returns a list of tokens with the original tokens.
+    """
+    global _token_types
+    _token_types = [globals()[cls_name] for cls_name in __all__]
 
 
 class BlockToken(object):
@@ -74,7 +86,6 @@ class BlockToken(object):
     def __contains__(self, text):
         return any(text in child for child in self.children)
 
-
     @property
     def children(self):
         """
@@ -90,7 +101,12 @@ class BlockToken(object):
     
     @staticmethod
     def read(lines):
-        return until('\n', lines)
+        line_buffer = [next(lines)]
+        for line in lines:
+            if line == '\n':
+                break
+            line_buffer.append(line)
+        return line_buffer
 
 
 class Document(BlockToken):
@@ -98,6 +114,8 @@ class Document(BlockToken):
     Document token.
     """
     def __init__(self, lines):
+        if isinstance(lines, str):
+            lines = lines.splitlines(keepends=True)
         self.footnotes = {}
         # Document tokens have immediate access to first-level block tokens.
         # Useful for footnotes, etc.
@@ -126,8 +144,8 @@ class Heading(BlockToken):
                 and len(line.split(' ', 1)[0]) <= 6)
 
     @staticmethod
-    def read(line):
-        return []
+    def read(lines):
+        return [next(lines)]
 
 class SetextHeading(BlockToken):
     def __init__(self, lines):
@@ -141,13 +159,18 @@ class SetextHeading(BlockToken):
 
     @staticmethod
     def read(lines):
-        line_buffer = []
-        for line in lines:
-            if line == '\n':
-                break
+        line_buffer = [next(lines)]
+        next_line = lines.peek()
+        while (next_line is not None
+                and next_line != '\n'
+                and not Heading.start(next_line)
+                and not CodeFence.start(next_line)
+                and not List.start(next_line)):
+            line = next(lines)
             line_buffer.append(line)
             if line.startswith(('===', '---')):
                 return line_buffer
+            next_line = lines.peek()
         raise tokenizer.MismatchException(line_buffer)
 
 
@@ -156,12 +179,7 @@ class Quote(BlockToken):
     Quote token. (["> # heading\n", "> paragraph\n"])
     """
     def __init__(self, lines):
-        content = []
-        for line in lines:
-            if line.startswith('> '):
-                content.append(line[2:])
-            else:  # lazy continuation
-                content.append(line)
+        content = [line[2:] if line.startswith('> ') else line for line in lines]
         super().__init__(content, tokenize)
 
     @staticmethod
@@ -175,12 +193,24 @@ class Paragraph(BlockToken):
     Boundary between span-level and block-level tokens.
     """
     def __init__(self, lines):
-        content = ''.join(lines)
+        content = ''.join(lines).strip()
         super().__init__(content, span_token.tokenize_inner)
 
     @staticmethod
     def start(line):
         return line != '\n'
+
+    @classmethod
+    def read(cls, lines):
+        line_buffer = [next(lines)]
+        next_line = lines.peek()
+        while (next_line is not None
+                and not Heading.start(next_line)
+                and not CodeFence.start(next_line)
+                and not List.start(next_line)):
+            line_buffer.append(next(lines))
+            next_line = lines.peek()
+        return line_buffer
 
 
 class BlockCode(BlockToken):
@@ -194,7 +224,12 @@ class BlockCode(BlockToken):
 
     @staticmethod
     def read(lines):
-        return until('\n', lines)
+        line_buffer = []
+        for line in lines:
+            if not line.startswith('    '):
+                break
+            line_buffer.append(line)
+        return line_buffer
 
 
 class CodeFence(BlockToken):
@@ -206,131 +241,141 @@ class CodeFence(BlockToken):
         children (iterator): contains a single span_token.RawText token.
         language (str): language of code block (default to empty).
     """
-    _open_line = ''
+    pattern = re.compile(r'( {0,3})((?:`|~){3,}) *(\S*)')
+    _open_info = None
     def __init__(self, lines):
-        self.language = lines[0].strip()[3:]
-        self._children = (span_token.RawText(''.join(lines[1:])),)
+        self.language = self.__class__._open_info[2]
+        self._children = (span_token.RawText(''.join(lines)),)
+        self.__class__._open_info = None
 
     @classmethod
     def start(cls, line):
-        if line.startswith('```'):
-            cls._open_line = '```\n'
-            return True
-        if line.startswith('~~~'):
-            cls._open_line = '~~~\n'
-            return True
-        return False
+        match_obj = cls.pattern.match(line)
+        if not match_obj:
+            return False
+        prepend, leader, lang = match_obj.groups()
+        if leader[0] in lang:
+            return False
+        cls._open_info = len(prepend), leader, lang
+        return True
 
     @classmethod
     def read(cls, lines):
-        return until(cls._open_line, lines)
-
-
-class List(BlockToken):
-    """
-    List tokens. (["- item\n", "    - nested item\n", "- item\n" ])
-    Boundary between span-level and block-level tokens.
-
-    Attributes:
-        children (list): inner tokens (ListItem or List).
-        start (int): first index of ordered list (undefined if unordered).
-    """
-    def __init__(self, lines):
-        self._children = self.build_list(lines)
-        leader = lines[0].split(' ', 1)[0]
-        if leader[:-1].isdigit():
-            self.start = int(leader[:-1])
-        else:
-            self.start = None
-
-    @classmethod
-    def build_list(cls, lines):
-        """
-        Constructor helper; builds a list from lines.
-
-        The basic control structure looks something like this:
-
-        - Does the current line have a valid leader?
-            * yes: we are in a normal line
-            * no:
-                + Does it start with four spaces?
-                    - yes:
-                        * Does it have a valid leader?
-                            + yes: we are in a nested list
-                            - no:  we are in a lazy-continuation line
-                    - no: we are in a lazy-continuation line
-
-        Yields:
-            a stream of ListItems or sub-Lists.
-        """
-        line_buffer = []
-        nested = False
-
-        def clear_buffer():
-            """
-            After each clear_buffer() call, nested is always False,
-            and line_buffer is always empty.
-            """
-            nonlocal nested, line_buffer
-            if not line_buffer:
-                # start of the list; nested = False
-                return
-            yield List(line_buffer) if nested else ListItem(line_buffer)
-            nested = False
-            line_buffer = []
-
-        for line in lines:
-            if cls.has_valid_leader(line):
-                yield from clear_buffer()
-            elif line.startswith('    '):
-                line = line[4:]
-                if cls.has_valid_leader(line) and not nested:
-                    yield from clear_buffer()
-                    nested = True
-            line_buffer.append(line)
-        yield from clear_buffer()
-
-    @classmethod
-    def has_valid_leader(cls, line):
-        """
-        Helper function; mainly because _build_list is gross enough.
-
-        Note: returns False if line starts with spaces.
-        """
-        return (line.startswith(('+ ', '- ', '* '))         # unordered
-                or (line.split(' ', 1)[0][:-1].isdigit()))  # ordered
-
-    @classmethod
-    def start(cls, line):
-        return cls.has_valid_leader(line.strip())
-
-    @classmethod
-    def read(cls, lines):
+        next(lines)
         line_buffer = []
         for line in lines:
-            if line == '\n' and not cls.has_valid_leader(lines.peek() or ''):
+            stripped_line = line.lstrip(' ')
+            diff = len(line) - len(stripped_line)
+            if stripped_line.startswith(cls._open_info[1]) and diff < 4:
                 break
-            line_buffer.append(line)
+            if diff > cls._open_info[0]:
+                stripped_line = ' ' * (diff - cls._open_info[0]) + stripped_line
+            line_buffer.append(stripped_line)
         return line_buffer
 
 
-class ListItem(BlockToken):
-    """
-    List item token. (["- item 1\n", "continued\n"])
+class List(BlockToken):
+    def __init__(self, items):
+        self._children, self.loose = items
+        leader = self.children[0].leader
+        self.start = None
+        if len(leader) != 1:
+            self.start = int(leader[:-1])
 
-    Should only be called by List._build_list().
-    """
-    def __init__(self, lines):
-        if lines[-1].strip() == '':
-            lines[0] = lines[0].split(' ', 1)[1]
-            super().__init__(lines, tokenize)
-        else:
-            line = ' '.join([line.strip() for line in lines])
-            try:
-                content = line.split(' ', 1)[1].strip()
-            except IndexError:
-                content = ''
-            super().__init__(content, span_token.tokenize_inner)
+    @classmethod
+    def start(cls, line):
+        return ListItem.parse_marker(line)
+
+    @classmethod
+    def read(cls, lines):
+        loose = False
+        leader = None
+        item_buffer = []
+        while True:
+            while lines.peek() == '\n':
+                next(lines)
+            output = ListItem.read(lines)
+            if output is None:
+                break
+            item = ListItem(*output)
+            if leader is None:
+                leader = item.leader
+            elif not cls.same_marker_type(leader, item.leader):
+                lines.reset()
+                break
+            loose |= item.loose
+            item_buffer.append(item)
+        return item_buffer, loose
+
+    @staticmethod
+    def same_marker_type(leader, other):
+        if len(leader) == 1:
+            return leader == other
+        return leader[:-1].isdigit() and other[:-1].isdigit() and leader[-1] == other[-1]
+
+
+class ListItem(BlockToken):
+    pattern = re.compile(r' *(\d{1,9}[.)]|[+\-*]) {1,4}')
+
+    def __init__(self, lines, prepend, leader):
+        self.leader = leader
+        self.prepend = prepend
+        lines[0] = lines[0][prepend:]
+        self.loose = True
+        self._children = tuple(tokenize(lines))
+        if len(self._children) == 1 and isinstance(self._children[0], Paragraph):
+            self._children = self._children[0].children
+            self.loose = False
+
+    @staticmethod
+    def in_continuation(line, prepend):
+        return len(line) - len(line.lstrip()) >= prepend
+
+    @classmethod
+    def parse_marker(cls, line, prepend=-1, leader=None):
+        """
+        Returns a pair (prepend, leader) iff:
+
+          - the line has a valid leader, and
+          - the line is not a sublist of a previous list item
+        """
+        match_obj = cls.pattern.match(line)
+        if match_obj is None:
+            return None        # no valid leader
+        content = match_obj.group(0)
+        if prepend != -1 and len(content) - len(content.lstrip()) >= prepend:
+            return None        # is sublist
+        # reassign prepend and leader
+        prepend = len(content)
+        leader = match_obj.group(1)
+        return prepend, leader
+
+    @classmethod
+    def read(cls, lines):
+        lines.anchor()
+        prepend = -1
+        leader = None
+        newline = False
+        line_buffer = []
+        next_line = lines.peek()
+        # first line in list item
+        if next_line is None:
+            return None
+        pair = cls.parse_marker(next_line)
+        if pair is None:
+            return None
+        prepend, leader = pair
+        line_buffer.append(next(lines))
+        next_line = lines.peek()
+        while (next_line is not None
+                and not cls.parse_marker(next_line, prepend, leader)
+                and (not newline or cls.in_continuation(next_line, prepend))):
+            line = next(lines)
+            line = line[prepend:] if newline else line.lstrip(' ')
+            line_buffer.append(line)
+            newline = next_line == '\n'
+            next_line = lines.peek()
+        return line_buffer, prepend, leader
 
 
 class Table(BlockToken):
@@ -343,7 +388,7 @@ class Table(BlockToken):
         children (tuple): inner tokens (TableRows).
     """
     def __init__(self, lines):
-        if lines[1].find('---') != -1:
+        if '---' in lines[1]:
             self.column_align = [self.parse_align(column)
                     for column in self.split_delimiter(lines[1])]
             self.header = TableRow(lines[0], self.column_align)
@@ -363,7 +408,7 @@ class Table(BlockToken):
         Returns:
             a list of align options (None, 0 or 1).
         """
-        return (column.strip() for column in delimiter[1:-2].split('|'))
+        return re.findall(r':?---+:?', delimiter)
 
     @staticmethod
     def parse_align(column):
@@ -375,25 +420,19 @@ class Table(BlockToken):
             0    if align = center;
             1    if align = right.
         """
-        if column[:4] == ':---' and column[-4:] == '---:':
-            return 0
-        if column[-4:] == '---:':
-            return 1
-        return None
+        return (0 if column[0] == ':' else 1) if column[-1] == ':' else None
 
     @staticmethod
     def start(line):
-        return line.startswith('|') and line.endswith('|\n')
+        return '|' in line
 
     @staticmethod
     def read(lines):
-        line_buffer = []
-        for line in lines:
-            if (not (line.startswith('|') and line.endswith('|\n'))
-                    or line == '\n'):
-                break
-            else:
-                line_buffer.append(line)
+        line_buffer = [next(lines)]
+        while lines.peek() is not None and '|' in lines.peek():
+            line_buffer.append(next(lines))
+        if len(line_buffer) < 2 or '---' not in line_buffer[1]:
+            raise tokenizer.MismatchException()
         return line_buffer
 
 
@@ -405,7 +444,7 @@ class TableRow(BlockToken):
     """
     def __init__(self, line, row_align=None):
         self.row_align = row_align or [None]
-        cells = line[1:-2].split('|')
+        cells = filter(None, line.strip().split('|'))
         self._children = (TableCell(cell.strip(), align)
                           for cell, align in zip_longest(cells, self.row_align))
 
@@ -447,12 +486,16 @@ class FootnoteBlock(BlockToken):
 
     @classmethod
     def read(cls, lines):
-        line_buffer = []
+        line_buffer = [next(lines)]
         while (lines.peek() is not None
                 and cls._is_legal(lines.peek())
                 and lines.peek() != '\n'):
             line_buffer.append(next(lines))
         return line_buffer
+
+    def store_footnotes(self, root):
+        for entry in self.children:
+            root.footnotes[entry.key] = entry.value
 
 
 class FootnoteEntry(BlockToken):
@@ -481,25 +524,18 @@ class Separator(BlockToken):
 
     @classmethod
     def start(cls, line):
-        chars = set(line.strip().replace(' ', ''))
+        line = line.strip()
+        if len(line) < 3:
+            return False
+        chars = set(line)
+        chars.discard(' ')
         return len(chars) == 1 and chars.pop() in {'-', '_', '*'}
 
     @staticmethod
     def read(lines):
-        return []
+        return [next(lines)]
 
 
-def until(stop_line, lines):
-    line_buffer = []
-    for line in lines:
-        if line == stop_line:
-            break
-        line_buffer.append(line)
-    return line_buffer
+_token_types = []
+reset_tokens()
 
-
-"""
-Tokens to be included in the parsing process, in the order specified.
-"""
-_token_types = [Heading, Quote, CodeFence, BlockCode, Separator, List,
-                Table, FootnoteBlock, SetextHeading, Paragraph]

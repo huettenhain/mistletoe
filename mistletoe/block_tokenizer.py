@@ -11,7 +11,7 @@ class MismatchException(Exception):
 
 class FileWrapper:
     def __init__(self, lines):
-        self.lines = self.normalize(lines)
+        self.lines = [line.replace('\t', '    ') for line in lines]
         self._index = -1
         self._anchor = 0
 
@@ -38,20 +38,6 @@ class FileWrapper:
             return self.lines[self._index+1]
         return None
 
-    @staticmethod
-    def normalize(lines):
-        line_buffer = []
-        code_fence = ''
-        for line in lines:
-            if line.startswith(('```', '~~~')):
-                if not code_fence:
-                    line_buffer.append('\n')
-                    code_fence = line[:3]
-                elif line.startswith(code_fence):
-                    code_fence = ''
-            line_buffer.append(line.replace('\t', '    '))
-        return line_buffer
-
 
 def tokenize(iterable, token_types, root=None):
     """
@@ -71,19 +57,15 @@ def tokenize(iterable, token_types, root=None):
         for token_type in token_types:
             try:
                 if token_type.start(line):
-                    token = token_type([line] + token_type.read(lines))
-                    if root and token.__class__.__name__ == 'FootnoteBlock':
-                        store_footnotes(root, token)
+                    lines._index -= 1
+                    token = token_type(token_type.read(lines))
+                    if root and hasattr(token, 'store_footnotes'):
+                        token.store_footnotes(root)
                     else:
                         yield token
                     break
             except MismatchException as e:
                 if e.lines is not None:
-                    yield token_types[-1]([line] + e.lines)
+                    yield token_types[-1](e.lines)
                     break
-
-
-def store_footnotes(root_node, footnote_block):
-    for entry in footnote_block.children:
-        root_node.footnotes[entry.key] = entry.value
 

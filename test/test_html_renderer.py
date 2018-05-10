@@ -68,7 +68,7 @@ class TestHTMLRenderer(TestRenderer):
         self._test_token('Paragraph', '<p>inner</p>\n')
 
     def test_block_code(self):
-        output = '<pre><code class="lang-sh">inner</code></pre>\n'
+        output = '<pre><code class="language-sh">inner</code></pre>\n'
         self._test_token('BlockCode', output, language='sh')
 
     def test_block_code_no_language(self):
@@ -128,11 +128,11 @@ class TestHTMLRendererFootnotes(TestCase):
     def test_footnote_image(self):
         from mistletoe import Document
         token = Document(['![alt] [foo]\n', '\n', '[foo]: bar "title"\n'])
-        output = '<p><img src="bar" title="title" alt="alt">\n</p>\n'
+        output = '<p><img src="bar" title="title" alt="alt"></p>\n'
         self.assertEqual(self.renderer.render(token), output)
 
     def test_footnote_link(self):
         from mistletoe import Document
         token = Document(['[name] [foo]\n', '\n', '[foo]: target\n'])
-        output = '<p><a href="target">name</a>\n</p>\n' 
+        output = '<p><a href="target">name</a></p>\n' 
         self.assertEqual(self.renderer.render(token), output)

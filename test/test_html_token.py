@@ -1,7 +1,7 @@
 from unittest import TestCase, mock
-from mistletoe.span_token import tokenize_inner
+from mistletoe.span_token import tokenize_inner, _token_types
 from mistletoe.block_token import tokenize
-import mistletoe.html_token as html_token
+from mistletoe import html_token
 from mistletoe.html_renderer import HTMLRenderer
 
 class TestHTMLToken(TestCase):
@@ -14,16 +14,13 @@ class TestHTMLToken(TestCase):
         self.assertIsInstance(token, token_cls)
         self.assertEqual(token.content, content)
 
-    @mock.patch('mistletoe.span_token.RawText')
-    def test_span(self, MockRawText):
+    def test_span(self):
         raw = 'some <span>more</span> text'
         tokens = tokenize_inner(raw)
         next(tokens)
-        MockRawText.assert_called_with('some ')
         content = '<span>more</span>'
         self._test_html_token(next(tokens), html_token.HTMLSpan, content)
         next(tokens)
-        MockRawText.assert_called_with(' text')
 
     def test_block(self):
         lines = ['<p>a paragraph\n',
@@ -47,6 +44,14 @@ class TestHTMLToken(TestCase):
         content = '<p class="bar">a paragraph\nwithin an html block\n</p>\n'
         self._test_html_token(token, html_token.HTMLBlock, content)
 
+    def test_comment(self):
+        from mistletoe.block_token import Heading
+        lines = ['<!-- hello -->\n', '\n', '# heading 1\n']
+        token1, token2 = tokenize(lines)
+        content = '<!-- hello -->\n'
+        self._test_html_token(token1, html_token.HTMLBlock, content)
+        self.assertIsInstance(token2, Heading)
+
     def test_empty_span(self):
         raw = '<span></span>'
         token = next(tokenize_inner(raw))
@@ -62,3 +67,4 @@ class TestHTMLToken(TestCase):
     def test_autolink(self):
         from mistletoe.span_token import AutoLink
         self.assertIsInstance(next(tokenize_inner('<autolink>')), AutoLink)
+

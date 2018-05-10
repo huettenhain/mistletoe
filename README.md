@@ -1,4 +1,4 @@
-<h1>mistletoe<img src='https://cdn.rawgit.com/miyuchina/mistletoe/master/resources/logo.svg' align='right'></h1>
+<h1>mistletoe<img src='https://cdn.rawgit.com/miyuchina/mistletoe/master/resources/logo.svg' align='right' width='128' height='128'></h1>
 
 [![Build Status][build-badge]][travis]
 [![Coverage Status][cover-badge]][coveralls]
@@ -27,9 +27,17 @@ Features
 * **Modular**: mistletoe is designed with modularity in mind. Its initial
   goal is to provide a clear and easy API to extend upon.
 
-* **Customizable**: as of now, mistletoe can render Markdown documents to
-  LaTeX, HTML and an abstract syntax tree out of the box. Writing a new
-  renderer for mistletoe is a relatively trivial task.
+* **Customizable**: writing a new renderer for mistletoe is a relatively
+  trivial task. You can even write [a Lisp][scheme] in it.
+
+**Supported Syntax**
+
+* HTML
+* LaTeX
+* Jira Markdown ([contrib][contrib])
+* Mathjax ([contrib][contrib])
+* Scheme ([contrib][contrib])
+* HTML + code highlighting ([contrib][contrib])
 
 Installation
 ------------
@@ -118,7 +126,7 @@ mode.  Like Python's REPL, interactive mode allows you to test how your
 Markdown will be interpreted by mistletoe:
 
 ```
-mistletoe [version 0.5.2] (interactive)
+mistletoe [version 0.6.1] (interactive)
 Type Ctrl-D to complete input, or Ctrl-C to exit.
 >>> some **bold text**
 ... and some *italics*
@@ -318,7 +326,7 @@ experience. If you want more control, however, give mistletoe a try.
 
 Copyright & License
 -------------------
-* mistletoe's logo uses artwork by Daniele De Santis, under
+* mistletoe's logo uses artwork by [Freepik][icon], under
   [CC BY 3.0][cc-by].
 * mistletoe is released under [MIT][license].
 
@@ -332,9 +340,12 @@ Copyright & License
 [mistune]: https://github.com/lepture/mistune
 [python-markdown]: https://github.com/waylan/Python-Markdown
 [python-markdown2]: https://github.com/trentm/python-markdown2
+[contrib]: https://github.com/miyuchina/mistletoe/tree/master/contrib
+[scheme]: https://github.com/miyuchina/mistletoe/blob/dev/contrib/scheme.py
 [contributing]: CONTRIBUTING.md
 [xkcd]: https://xkcd.com/208/
 [meme]: http://www.greghendershott.com/img/grumpy-regexp-parser.png
 [hendershott]: http://www.greghendershott.com/2013/11/markdown-parser-redesign.html
+[icon]: https://www.freepik.com
 [cc-by]: https://creativecommons.org/licenses/by/3.0/us/
 [license]: LICENSE
